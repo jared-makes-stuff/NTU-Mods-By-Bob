@@ -1,0 +1,84 @@
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+logs
+*.log
+
+# OS / Editor noise
+.DS_Store
+Thumbs.db
+.eslintcache
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea
+*.swp
+*.swo
+*~
+
+# Environment files
+.env
+.env.*
+!.env.example
+!.env.local.example
+!.env.sample
+
+# Dependencies
+node_modules
+
+# Build, cache, and test output
+dist
+build
+.next
+.turbo
+.vercel
+.swc
+out
+coverage
+.nyc_output
+.vitest
+*.tsbuildinfo
+next-env.d.ts
+
+# Frontend workspace artifacts
+/frontend/node_modules
+/frontend/.next
+/frontend/.turbo
+/frontend/.vercel
+/frontend/.swc
+/frontend/dist
+/frontend/out
+/frontend/.env
+/frontend/.env.local
+
+# Backend workspace artifacts
+/backend/node_modules
+/backend/.env
+/backend/.env.local
+/backend/dist
+/backend/build
+/backend/coverage
+
+# Prisma
+/backend/prisma/*.db
+/backend/prisma/*.db-journal
+/backend/prisma/migrations/*_*/
+
+# Old/Reference files (if not needed)
+/old/
+/Temp testing/
+
+# AI context files
+aicontext.md
+.aicontext
+.cursorrules
+.aidigest
+
+# Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*

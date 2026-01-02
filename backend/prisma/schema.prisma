@@ -1,0 +1,417 @@
+// This is your Prisma schema file
+// Learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Prisma Client Generator
+// Generates the type-safe database client
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Database Configuration
+// PostgreSQL database connection
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// CORE IDENTITY & USER MANAGEMENT
+// ============================================================================
+
+/// User model represents authenticated users of the system
+/// Supports both traditional email/password and OAuth authentication
+model User {
+  id            String   @id @default(uuid()) @db.Uuid
+  email         String   @unique @db.VarChar(255)
+  
+  /// Password hash for traditional auth (null for OAuth-only users)
+  passwordHash  String?  @map("password_hash") @db.VarChar(255)
+  
+  name          String   @db.VarChar(255)
+  
+  /// User role for permission checks (e.g., "user", "admin", "moderator")
+  role          String   @default("user") @db.VarChar(50)
+  
+  /// OAuth accounts linked to this user
+  /// Example: [{ "provider": "google", "id": "123", "email": "..." }]
+  oauthAccounts Json?    @default("[]") @map("oauth_accounts") @db.JsonB
+  
+  /// Avatar/profile picture URL (from OAuth or constructed)
+  avatarUrl     String?  @map("avatar_url") @db.VarChar(500)
+  
+  /// Binary data for the avatar image
+  avatarData    Bytes?   @map("avatar_data")
+  
+  /// MIME type of the avatar image (e.g., "image/png")
+  avatarMimeType String? @map("avatar_mime_type") @db.VarChar(50)
+  
+  /// JSONB column for flexible UI preferences (theme, compact view, etc.)
+  /// Example: { "theme": "dark", "compactView": true, "defaultSemester": "AY2024/25 Semester 1" }
+  settings      Json?    @db.JsonB
+  
+  /// JSONB column for privacy controls
+  /// Example: { "profileVisibility": "private", "showTimetable": true, "showCoursePlan": false }
+  privacy       Json?    @db.JsonB
+
+  /// Telegram chat ID linked for vacancy alerts
+  telegramChatId String?  @map("telegram_chat_id") @db.VarChar(100)
+
+  /// Telegram username linked for vacancy alerts
+  telegramUsername String? @map("telegram_username") @db.VarChar(100)
+
+  /// Timestamp for Telegram link
+  telegramLinkedAt DateTime? @map("telegram_linked_at")
+  
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  timetables Timetable[]  // User can have multiple saved timetables
+  plannedModules PlannedModule[] // User's planned modules for course planning
+  reviews    ModuleReview[] // User can write reviews for modules
+  topics     ModuleTopic[]  // User can submit topics covered in modules
+  vacancyAlerts VacancyAlertTask[]
+  telegramLinkTokens TelegramLinkToken[]
+
+  @@map("users")
+  @@index([email])
+  @@unique([telegramChatId])
+}
+
+// ============================================================================
+// MODULE CATALOGUE (Synced External Data)
+// ============================================================================
+
+/// Module model represents university course modules
+/// This data is periodically synced from external sources  
+/// Modules can have multiple entries for different semesters with different exam dates
+model Module {
+  code        String   @db.VarChar(20)      // e.g., "SC2001", "CE2002"
+  
+  /// Academic semester: "2024_1", "2024_2", "2024_S", "2025_1", etc.
+  semester    String   @db.VarChar(10)
+  
+  name        String   @db.VarChar(255)      // e.g., "Algorithm Design & Analysis"
+  au          Float    @db.Real              // Academic Units (typically 3 or 4)
+  school      String   @db.VarChar(100)      // e.g., "SCSE", "EEE", "MAE"
+  description String?  @db.Text             // Full module description
+  
+  /// JSONB for prerequisite tree structure
+  /// Example: { "or": ["SC1003", { "and": ["SC1004", "SC1005"] }] }
+  prerequisites Json?   @db.JsonB
+  
+  /// Department code (same as school in most cases)
+  department    String? @db.VarChar(100)
+  
+  /// Grade type: "LETTER GRADED", "PASS/FAIL", etc.
+  gradeType     String? @map("grade_type") @db.VarChar(50)
+  
+  /// Mutual exclusions - courses that cannot be taken together
+  mutualExclusions String? @map("mutual_exclusions") @db.Text
+  
+  /// Programs this course is not available to
+  notAvailableTo String? @map("not_available_to") @db.Text
+  
+  /// Programs with specific course requirements that exclude this
+  notAvailableToAllWith String? @map("not_available_to_all_with") @db.Text
+  
+  /// Whether this module can be taken as a Broadening and Deepening Elective (BDE)
+  bde Boolean @default(false) @map("bde")
+  
+  /// Whether this module can be taken as an unrestricted elective
+  unrestrictedElective Boolean @default(false) @map("unrestricted_elective")
+  
+  /// Exam date and time from exam timetable for this specific semester
+  /// Combined from exam_date and exam_time fields
+  examDateTime  String? @map("exam_date_time") @db.VarChar(50)
+  
+  /// Exam duration in minutes (e.g., 120, 150)
+  examDuration  Int?    @map("exam_duration") @db.Integer
+
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  indexes        Index[]         // A module has multiple class indexes
+
+  @@id([code, semester])
+  @@map("modules")
+  @@index([school])
+  @@index([au])
+  @@index([semester])
+  @@index([code])
+}
+
+/// Index model represents a specific class group for a module with all time slot information
+/// Example: Module SC2001 may have Index 10101 with LEC on MON 0900-1100, TUT on WED 1400-1500
+model Index {
+  moduleCode   String   @map("module_code") @db.VarChar(20)
+  indexNumber  String   @map("index_number") @db.VarChar(20)  // e.g., "10101"
+  
+  /// Academic semester: "2024_1", "2024_2", "2024_S", "2025_1", etc.
+  semester     String   @db.VarChar(10)
+  
+  /// Type of lesson: "LEC", "TUT", "LAB", "SEM", etc.
+  type         String   @db.VarChar(10)
+  
+  /// Day of week: "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"
+  day          String   @db.VarChar(3)
+  
+  /// Start time in 24-hour format: "0900", "1430", etc.
+  startTime    String   @map("start_time") @db.VarChar(4)
+  
+  /// End time in 24-hour format: "1100", "1630", etc.
+  endTime      String   @map("end_time") @db.VarChar(4)
+  
+  /// Venue/Location: "LT1A", "S1.3-B2-10", "Online", etc.
+  venue        String   @db.VarChar(100)
+  
+  /// Tutorial/Lab group: "SS1", "LE1", etc. (may be empty for lectures)
+  group        String?  @db.VarChar(20)
+  
+  /// Array of teaching weeks: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+  /// Some classes may skip certain weeks
+  weeks        Int[]    @db.Integer
+  
+  /// Number of available slots (updated periodically by vacancy checker)
+  vacancy      Int?     @db.Integer
+  
+  /// Number of students on waitlist (updated periodically by vacancy checker)
+  waitlist     Int?     @db.Integer
+  
+  /// Timestamp when vacancy and waitlist were last checked
+  lastVacancyCheckAt DateTime? @map("last_vacancy_check_at")
+  
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  module Module @relation(fields: [moduleCode, semester], references: [code, semester], onDelete: Cascade)
+
+  @@id([moduleCode, indexNumber, semester, type, day, startTime])
+  @@map("indexes")
+  @@index([moduleCode])
+  @@index([indexNumber])
+  @@index([semester])
+  @@index([day])
+  @@index([moduleCode, semester])
+  @@index([lastVacancyCheckAt])
+}
+
+// ============================================================================
+// TIMETABLE PLANNER
+// ============================================================================
+
+/// Timetable model represents a saved schedule configuration
+/// Users can save multiple timetables and share them with others
+/// Stores selected module+index combinations in a JSONB column
+model Timetable {
+  id          String   @id @default(uuid()) @db.Uuid
+  userId      String   @map("user_id") @db.Uuid
+  name        String   @db.VarChar(255)           // e.g., "My Fall 2024 Schedule"
+  semester    String   @db.VarChar(50)            // e.g., "AY2024/25 Semester 1"
+  
+  /// JSONB array of selected module+index combinations with UI metadata
+  /// Example: [
+  ///   { "moduleCode": "SC2001", "indexNumber": "10101", "color": "#3b82f6" },
+  ///   { "moduleCode": "CE2002", "indexNumber": "20202", "color": "#ef4444" }
+  /// ]
+  selections  Json     @default("[]") @db.JsonB
+  
+  /// Whether this timetable is shared publicly
+  isShared    Boolean  @default(false) @map("is_shared")
+  
+  /// Unique UUID for public sharing (null if not shared)
+  /// This allows read-only public access without authentication
+  shareLinkId String?  @unique @map("share_link_id") @db.Uuid
+  
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("timetables")
+  @@index([userId])
+  @@index([shareLinkId])
+}
+
+// ============================================================================
+// COURSE PLANNER (Planned Modules)
+// ============================================================================
+
+/// PlannedModule model represents a module planned by a user
+/// Tracks module status: planned, registered, or completed
+/// Note: References module by code only (not semester-specific) since user plans
+/// can reference future semesters that may not have data yet
+model PlannedModule {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  moduleCode String   @map("module_code") @db.VarChar(20)
+  
+  /// Academic year: 1, 2, 3, 4 (or higher for extended programs)
+  year       Int      @db.Integer
+  
+  /// Semester: "Semester 1", "Semester 2", "Winter", "Summer", "Special"
+  semester   String   @db.VarChar(20)
+  
+  /// Status of this module: "PLANNED", "REGISTERED", "COMPLETED", "DROPPED"
+  status     String   @default("PLANNED") @db.VarChar(20)
+  
+  /// Grade received (if completed): "A+", "A", "B+", etc.
+  grade      String?  @db.VarChar(5)
+  
+  /// Optional remarks/notes (packed with custom title and AU)
+  remarks    String?  @db.Text
+  
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // No direct relation to Module since we can't guarantee semester match
+
+  @@unique([userId, moduleCode, year, semester]) // Prevent duplicate module in same semester
+  @@map("planned_modules")
+  @@index([userId])
+  @@index([moduleCode])
+}
+
+// ============================================================================
+// VACANCY ALERTS (Telegram-linked notifications)
+// ============================================================================
+
+/// VacancyAlertTask represents a module index tracked for vacancy updates.
+/// Vacancy and waitlist data is stored in the Index table and updated by the scheduler.
+model VacancyAlertTask {
+  id            String   @id @default(uuid()) @db.Uuid
+  userId        String   @map("user_id") @db.Uuid
+  moduleCode    String   @map("module_code") @db.VarChar(20)
+  indexNumber   String   @map("index_number") @db.VarChar(20)
+  
+  /// Track the last vacancy value that triggered a notification (0 = never notified or last known was 0)
+  lastNotifiedVacancy Int @default(0) @map("last_notified_vacancy")
+  
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, moduleCode, indexNumber])
+  @@map("vacancy_alert_tasks")
+  @@index([userId])
+  @@index([moduleCode, indexNumber])
+}
+
+/// Short-lived Telegram link token used to bind a Telegram account to a user.
+model TelegramLinkToken {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  code      String   @unique @db.VarChar(20)
+  expiresAt DateTime @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("telegram_link_tokens")
+  @@index([userId])
+}
+
+// ============================================================================
+// USER-GENERATED CONTENT (Reviews, Ratings, Topics)
+// ============================================================================
+
+/// ModuleReview model represents user reviews and ratings for modules
+/// Includes overall rating, comments, and breakdown of assessment weightage
+/// Note: Reviews are for module codes in general, not semester-specific
+model ModuleReview {
+  id                  String   @id @default(uuid()) @db.Uuid
+  moduleCode          String   @map("module_code") @db.VarChar(20)
+  userId              String   @map("user_id") @db.Uuid
+  
+  /// Overall rating (1-5 stars)
+  rating              Float    @db.Real
+  
+  /// Written review content
+  content             String?  @db.Text
+  
+  /// JSONB for assessment weightage breakdown
+  /// Example: { "midterm": 20, "finals": 40, "lab": 25, "project": 15 }
+  assessmentWeightage Json?    @map("assessment_weightage") @db.JsonB
+  
+  /// Academic term when the user took this module
+  term                String?  @db.VarChar(50)
+  
+  /// Helpful votes count (upvotes from other users)
+  helpfulCount        Int      @default(0) @map("helpful_count") @db.Integer
+  
+  /// Whether this review is flagged for moderation
+  isFlagged           Boolean  @default(false) @map("is_flagged")
+  
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  // No direct relation to Module (reviews are code-based, not semester-specific)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([moduleCode, userId]) // One review per user per module
+  @@map("module_reviews")
+  @@index([moduleCode])
+  @@index([userId])
+  @@index([rating])
+}
+
+/// ModuleTopic model represents topics covered in a module
+/// Submitted and voted on by users who have taken the course
+/// Note: Topics are for module codes in general, not semester-specific
+model ModuleTopic {
+  id          String   @id @default(uuid()) @db.Uuid
+  moduleCode  String   @map("module_code") @db.VarChar(20)
+  
+  /// Topic name (e.g., "Process Management", "Memory Management")
+  name        String   @db.VarChar(255)
+  
+  /// Duration covered (e.g., "2 weeks", "4 hours")
+  duration    String?  @db.VarChar(50)
+  
+  /// Week number when this topic was taught (e.g., 3 for week 3)
+  weekTaught  Int?     @map("week_taught") @db.Integer
+  
+  /// Suggested edit to this topic (for community moderation)
+  suggestedEdit String? @map("suggested_edit") @db.Text
+  
+  /// Reason for suggesting an edit
+  editReason    String? @map("edit_reason") @db.Text
+  
+  /// Hierarchy level (1 = main topic, 2 = subtopic, 3 = sub-subtopic)
+  level       Int      @default(1) @db.Integer
+  
+  /// Parent topic ID for hierarchical structure
+  parentId    String?  @map("parent_id") @db.Uuid
+  
+  /// User who submitted this topic
+  submittedBy String   @map("submitted_by") @db.Uuid
+  
+  /// Upvotes count (users who confirm this topic was covered)
+  upvotes     Int      @default(0) @db.Integer
+  
+  /// Order position within parent (for sorting)
+  orderIndex  Int      @default(0) @map("order_index") @db.Integer
+  
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  // No direct relation to Module (topics are code-based, not semester-specific)
+  user   User        @relation(fields: [submittedBy], references: [id], onDelete: Cascade)
+  parent ModuleTopic? @relation("TopicHierarchy", fields: [parentId], references: [id], onDelete: Cascade)
+  children ModuleTopic[] @relation("TopicHierarchy")
+
+  @@map("module_topics")
+  @@index([moduleCode])
+  @@index([parentId])
+  @@index([submittedBy])
+}
+

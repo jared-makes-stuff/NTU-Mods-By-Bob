@@ -1,0 +1,8 @@
+{
+  "name": "ntu-mods",
+  "private": true,
+  "workspaces": [
+    "frontend",
+    "backend"
+  ]
+}
